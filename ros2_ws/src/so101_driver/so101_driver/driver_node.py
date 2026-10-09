@@ -133,11 +133,19 @@ class DriverNode(rclpy.node.Node):
                 continue
             current = self._sent.get(key, self._last_obs[key])
             action[key] = current + max(-max_step, min(max_step, target - current))
+        try:
+            self._robot.send_action(action)
+        except ConnectionError as e:
+            self.get_logger().warn(f"Command skipped: {e}", throttle_duration_sec=1.0)
+            return
         self._sent.update(action)
-        self._robot.send_action(action)
 
     def _publish_joint_states(self):
-        obs = self._robot.get_observation()
+        try:
+            obs = self._robot.get_observation()
+        except ConnectionError as e:
+            self.get_logger().warn(f"Read skipped: {e}", throttle_duration_sec=1.0)
+            return
         self._last_obs = obs
 
         msg = JointState()
