@@ -63,6 +63,24 @@ services:
       cd /ros2_ws && source install/setup.bash &&
       ros2 launch so101_description viz.launch.py"
 
+  # Perception: object and drop box detection from /external_cam/image_raw.
+  # Built by control (shared ros2_ws volume), only runs the node.
+  perception:
+    build:
+      context: .
+      dockerfile: Dockerfile.perception
+    image: tek5/perception
+    init: true
+    environment: *ros-env
+    volumes:
+      - ../ros2_ws:/ros2_ws
+    networks: [rosnet]
+    command: >
+      bash -lc "source /opt/ros/jazzy/setup.bash &&
+      until [ -f /ros2_ws/install/so101_perception/lib/so101_perception/perception ]; do echo 'waiting for build (control)...'; sleep 1; done &&
+      cd /ros2_ws && source install/setup.bash &&
+      ros2 run so101_perception perception"
+
   # RViz in the browser, for macOS (XQuartz cannot give RViz2 OpenGL >= 1.5):
   #   docker-compose up -d --build rviz   ->  http://localhost:6080/vnc.html
   # Needs tek5/control built first. RViz restarts if you close it.

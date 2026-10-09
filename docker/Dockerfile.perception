@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-image-transport \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --break-system-packages --no-cache-dir "opencv-python-headless==4.10.*"
+RUN pip install --break-system-packages --no-cache-dir "numpy<2" "opencv-python-headless==4.10.*"
 
 # To extend this image:
 # FROM tek5/perception

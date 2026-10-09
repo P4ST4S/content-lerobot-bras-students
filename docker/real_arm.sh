@@ -21,9 +21,9 @@ trap 'kill $BRIDGE_PID 2>/dev/null' EXIT
 sleep 1
 kill -0 "$BRIDGE_PID" 2>/dev/null || { echo "Bridge failed to start (port $TCP_PORT busy?)"; exit 1; }
 
-[ "${1:-}" = "--build" ] && docker-compose build control rviz
-docker-compose up -d control viz rviz
-docker-compose restart control
+[ "${1:-}" = "--build" ] && docker-compose build control rviz perception
+docker-compose up -d control viz rviz perception
+docker-compose restart control perception
 
 echo "Hold the arm. RViz: http://localhost:6080/vnc.html  (Ctrl+C to stop)"
-docker-compose logs -f --since 1s control
+docker-compose logs -f --since 1s control perception
