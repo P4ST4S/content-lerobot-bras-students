@@ -37,6 +37,8 @@ DEFAULT_PORT = "/dev/ttyACM0"
 
 CONTROL_HZ = 50.0
 JOINT_STATE_HZ = 30.0
+MAX_JOINT_SPEED = 2.0
+MOTOR_ACCELERATION = 50
 
 
 def _gripper_pct_to_rad(pct: float) -> float:
@@ -58,10 +60,17 @@ class DriverNode(rclpy.node.Node):
         self._robot = self._connect_arm(port)
         self.get_logger().info(f"Robot connected: {type(self._robot).__name__}")
 
+        if not self._use_sim:
+            for motor in self._robot.bus.motors:
+                self._robot.bus.write("Acceleration", motor, MOTOR_ACCELERATION)
+            self.get_logger().info(f"Motor acceleration set to {MOTOR_ACCELERATION}")
+
         self._joint_state_pub = self.create_publisher(JointState, "joint_states", 10)
         self.create_timer(1.0 / JOINT_STATE_HZ, self._publish_joint_states)
 
         self._last_command: JointState | None = None
+        self._last_obs: dict | None = None
+        self._sent: dict = {}
         self.create_subscription(JointState, "joint_command", self._cb_joint_command, 10)
         self.create_timer(1.0 / CONTROL_HZ, self._control_step)
 
@@ -107,20 +116,29 @@ class DriverNode(rclpy.node.Node):
 
     def _cb_joint_command(self, msg: JointState):
         self._last_command = msg
+        self._sent = {}
 
     def _control_step(self):
-        if self._last_command is None:
+        if self._last_command is None or self._last_obs is None:
             return
         cmd = self._last_command
-        action = {
-            f"{name}.pos": position
-            for name, position in zip(cmd.name, cmd.position)
-            if name in JOINT_NAMES
-        }
+        max_step = MAX_JOINT_SPEED / CONTROL_HZ
+        action = {}
+        for name, target in zip(cmd.name, cmd.position):
+            if name not in JOINT_NAMES:
+                continue
+            key = f"{name}.pos"
+            if name == "gripper":
+                action[key] = target
+                continue
+            current = self._sent.get(key, self._last_obs[key])
+            action[key] = current + max(-max_step, min(max_step, target - current))
+        self._sent.update(action)
         self._robot.send_action(action)
 
     def _publish_joint_states(self):
         obs = self._robot.get_observation()
+        self._last_obs = obs
 
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
