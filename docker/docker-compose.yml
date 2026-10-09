@@ -62,6 +62,31 @@ services:
       cd /ros2_ws && source install/setup.bash &&
       ros2 launch so101_description viz.launch.py"
 
+  # RViz in the browser, for macOS (XQuartz cannot give RViz2 OpenGL >= 1.5):
+  #   docker-compose up -d --build rviz   ->  http://localhost:6080/vnc.html
+  # Needs tek5/control built first. RViz restarts if you close it.
+  rviz:
+    build:
+      context: .
+      dockerfile: Dockerfile.rviz
+    image: tek5/rviz
+    init: true
+    environment:
+      <<: *ros-env
+      DISPLAY: ":1"
+    volumes:
+      - ../ros2_ws:/ros2_ws
+    networks: [rosnet]
+    ports: ["6080:6080"]
+    command: >
+      bash -lc "Xvfb :1 -screen 0 1600x900x24 & sleep 1 &&
+      openbox & x11vnc -display :1 -forever -shared -nopw -quiet &
+      websockify --web /usr/share/novnc 6080 localhost:5900 &
+      source /opt/ros/jazzy/setup.bash &&
+      until [ -f /ros2_ws/install/setup.bash ]; do echo 'waiting for build (control)...'; sleep 1; done &&
+      source /ros2_ws/install/setup.bash &&
+      while true; do rviz2 -d /ros2_ws/so101.rviz; sleep 1; done"
+
 networks:
   rosnet:
     driver: bridge

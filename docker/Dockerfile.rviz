@@ -1,0 +1,8 @@
+# RVIZ container — RViz in the browser (Xvfb + noVNC), for hosts where X11
+# forwarding cannot give RViz a usable OpenGL context (macOS + XQuartz).
+# RViz renders in software (Mesa llvmpipe) inside the container.
+FROM tek5/control
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb x11vnc novnc websockify openbox \
+    && rm -rf /var/lib/apt/lists/*
