@@ -55,6 +55,7 @@ class BrainNode(rclpy.node.Node):
         }
 
         self._ee_pose_pub = self.create_publisher(PoseStamped, "end_effector_pose", 10)
+        self._ee_point_pub = self.create_publisher(PointStamped, "end_effector_point", 10)
         self._joint_command_pub = self.create_publisher(JointState, "joint_command", 10)
         self.create_subscription(JointState, "joint_states", self._cb_joint_states, 10)
         self.create_service(GoToTarget, "go_to_target", self._cb_go_to_target)
@@ -108,6 +109,7 @@ class BrainNode(rclpy.node.Node):
         msg.pose.orientation.w = quat.w
 
         self._ee_pose_pub.publish(msg)
+        self._ee_point_pub.publish(PointStamped(header=msg.header, point=msg.pose.position))
 
     def _solve_ik(self, target_position):
         lower, upper = self._model.lowerPositionLimit, self._model.upperPositionLimit
