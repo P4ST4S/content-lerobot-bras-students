@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-joint-state-publisher \
     ros-jazzy-rviz2 \
     ros-jazzy-pinocchio \
+    socat \
     && rm -rf /var/lib/apt/lists/*
 
 # Provided packages (driver + sim) and ikpy for the IK.

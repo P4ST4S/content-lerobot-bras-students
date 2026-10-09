@@ -25,6 +25,13 @@ for i in 0 1 2 3; do
   [ -e /dev/ttyUSB$i ] || mknod /dev/ttyUSB$i c 188 $i 2>/dev/null && chmod 666 /dev/ttyUSB$i 2>/dev/null || true
 done
 
+# Serial port bridged over TCP (hosts without USB passthrough, see serial_bridge.py)
+if [ -n "${SERIAL_TCP:-}" ]; then
+  socat pty,link=/dev/ttyBRIDGE0,raw,echo=0 "tcp:${SERIAL_TCP}" &
+  pids+=($!)
+  sleep 1
+fi
+
 launch so101_driver driver.launch.py "use_sim:=${USE_SIM:-true}" "port:=${REAL_ROBOT_PORT:-/dev/ttyACM0}"
 launch so101_brain brain.launch.py
 
