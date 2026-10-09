@@ -41,7 +41,9 @@ JOINT_STATE_HZ = 30.0
 
 
 def _gripper_pct_to_rad(pct: float) -> float:
-    raise NotImplementedError("TO DO")
+    lower, higher = GRIPPER_RANGE_RAD
+    pct = min(max(pct, 0.0), 100.0)
+    return lower + pct / 100.0 * (higher - lower)
 
 
 class DriverNode(rclpy.node.Node):
@@ -57,7 +59,12 @@ class DriverNode(rclpy.node.Node):
         self._robot = self._connect_arm(port)
         self.get_logger().info(f"Robot connected: {type(self._robot).__name__}")
 
-        # TODO: create the publishers, subscribers and timers.
+        self._joint_state_pub = self.create_publisher(JointState, "joint_states", 10)
+        self.create_timer(1.0 / JOINT_STATE_HZ, self._publish_joint_states)
+
+        self._last_command: JointState | None = None
+        self.create_subscription(JointState, "joint_command", self._cb_joint_command, 10)
+        self.create_timer(1.0 / CONTROL_HZ, self._control_step)
 
         self.get_logger().info("Driver node ready.")
 
@@ -89,17 +96,35 @@ class DriverNode(rclpy.node.Node):
         return robot
 
     def destroy_node(self):
-        # TODO: disconnect the backend
+        if hasattr(self, "_robot") and self._robot.is_connected:
+            self._robot.disconnect()
         super().destroy_node()
 
     def _cb_joint_command(self, msg: JointState):
-        raise NotImplementedError("TO DO")
+        self._last_command = msg
 
     def _control_step(self):
-        raise NotImplementedError("TO DO")
+        if self._last_command is None:
+            return
+        cmd = self._last_command
+        action = {
+            f"{name}.pos": position
+            for name, position in zip(cmd.name, cmd.position)
+            if name in JOINT_NAMES
+        }
+        self._robot.send_action(action)
 
     def _publish_joint_states(self):
-        raise NotImplementedError("TO DO")
+        obs = self._robot.get_observation()
+
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = JOINT_NAMES
+        msg.position = [obs[f"{name}.pos"] for name in JOINT_NAMES[:-1]] + [
+            _gripper_pct_to_rad(obs["gripper.pos"])
+        ]
+
+        self._joint_state_pub.publish(msg)
 
 
 def main(args=None):
