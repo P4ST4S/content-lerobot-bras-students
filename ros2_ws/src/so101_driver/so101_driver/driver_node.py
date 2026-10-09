@@ -9,10 +9,15 @@ TODO:
   - Publish /joint_states in RADIANS (>= 20 Hz)
   - Subscribe to /joint_command (radians, gripper 0-100 %)
 """
+import json
+import os
+import socket
+import struct
 import threading
 import time
 from pathlib import Path
 
+import cv2
 import mujoco
 import numpy as np
 import rclpy
@@ -46,8 +51,17 @@ CONTROL_HZ = 50.0
 JOINT_STATE_HZ = 30.0
 MAX_JOINT_SPEED = 2.0
 MOTOR_ACCELERATION = 50
+
+JOINT_OFFSETS = {
+    "shoulder_pan": -0.0606,
+    "shoulder_lift": 0.0736,
+    "elbow_flex": 0.0898,
+    "wrist_flex": 0.0176,
+    "wrist_roll": 0.0575,
+}
 CAMERA_HZ = 10.0
 CAMERA_FRAME = "external_cam"
+CAMERA_CALIBRATION = Path("/ros2_ws/calibration/camera.json")
 
 
 def _gripper_pct_to_rad(pct: float) -> float:
@@ -67,6 +81,10 @@ class DriverNode(rclpy.node.Node):
         self.get_logger().info(f"Mode: {mode} (port={port})")
 
         self._robot = self._connect_arm(port)
+        self._joint_offsets = {} if self._use_sim else JOINT_OFFSETS
+        self._passive = not self._use_sim and not self._robot.bus.read("Torque_Enable", "shoulder_pan")
+        if self._passive:
+            self.get_logger().warn("Torque is off: /joint_command is ignored (read-only mode)")
         self._robot_lock = threading.Lock()
         self.get_logger().info(f"Robot connected: {type(self._robot).__name__}")
 
@@ -84,16 +102,52 @@ class DriverNode(rclpy.node.Node):
         self.create_subscription(JointState, "joint_command", self._cb_joint_command, 10)
         self.create_timer(1.0 / CONTROL_HZ, self._control_step)
 
+        self._bridge = CvBridge()
+        self._image_pub = self.create_publisher(Image, "external_cam/image_raw", 10)
+        self._camera_info_pub = self.create_publisher(CameraInfo, "external_cam/camera_info", 10)
+        self._tf_static = StaticTransformBroadcaster(self)
+        self._camera_running = True
         if self._use_sim:
-            self._bridge = CvBridge()
-            self._image_pub = self.create_publisher(Image, "external_cam/image_raw", 10)
-            self._camera_info_pub = self.create_publisher(CameraInfo, "external_cam/camera_info", 10)
-            self._camera_info = self._build_camera_info()
-            self._tf_static = StaticTransformBroadcaster(self)
-            self._tf_static.sendTransform(self._build_camera_transform())
-            self._camera_running = True
+            k = self._robot.get_camera_intrinsics()
+            extrinsics = self._robot.get_camera_extrinsics()
+            self._camera_info = self._build_camera_info(
+                k, self._robot.camera_width, self._robot.camera_height
+            )
+            self._tf_static.sendTransform(
+                self._build_camera_transform(
+                    extrinsics[:3, :3] @ np.diag([1.0, -1.0, -1.0]), extrinsics[:3, 3]
+                )
+            )
             self._camera_thread = threading.Thread(target=self._camera_loop, daemon=True)
             self._camera_thread.start()
+        elif os.environ.get("CAMERA_TCP"):
+            calib = json.loads(CAMERA_CALIBRATION.read_text()) if CAMERA_CALIBRATION.is_file() else {}
+            self._undistort_maps = None
+            self._camera_info = CameraInfo(header=self._camera_info_header())
+            if "K" in calib:
+                k, dist = np.array(calib["K"]), np.array(calib["dist"])
+                size = (calib["width"], calib["height"])
+                new_k, _ = cv2.getOptimalNewCameraMatrix(k, dist, size, 0)
+                self._undistort_maps = cv2.initUndistortRectifyMap(
+                    k, dist, None, new_k, size, cv2.CV_16SC2
+                )
+                self._camera_info = self._build_camera_info(new_k, *size)
+            else:
+                self.get_logger().warn("Camera not calibrated: publishing raw images (intrinsics step)")
+            if "T_world_camera" in calib:
+                world_camera = np.array(calib["T_world_camera"])
+                self._tf_static.sendTransform(
+                    self._build_camera_transform(world_camera[:3, :3], world_camera[:3, 3])
+                )
+            else:
+                self.get_logger().warn("No camera pose yet: run 'webcam.py extrinsics'")
+            self._camera_thread = threading.Thread(
+                target=self._real_camera_loop, args=(os.environ["CAMERA_TCP"],), daemon=True
+            )
+            self._camera_thread.start()
+        else:
+            self._camera_running = False
+            self.get_logger().warn("No camera: set CAMERA_TCP in docker/.env")
 
         self.get_logger().info("Driver node ready.")
 
@@ -122,7 +176,7 @@ class DriverNode(rclpy.node.Node):
                 f"{CALIBRATION_FILE} does not match the motors: wrong file for this arm? "
                 "Re-run lerobot-calibrate on the host."
             )
-        robot.bus.disable_torque()  # Comment out this line to control the robot.
+        # robot.bus.disable_torque()  # Comment out this line to control the robot.
         self.get_logger().info(
             "Torque disabled: arm can be moved freely by hand. Remove this part to control the arm."
         )
@@ -143,6 +197,8 @@ class DriverNode(rclpy.node.Node):
         self._sent = {}
 
     def _control_step(self):
+        if self._passive:
+            return
         if self._last_command is None or self._last_obs is None:
             return
         cmd = self._last_command
@@ -155,6 +211,7 @@ class DriverNode(rclpy.node.Node):
             if name == "gripper":
                 action[key] = target
                 continue
+            target += self._joint_offsets.get(name, 0.0)
             current = self._sent.get(key, self._last_obs[key])
             action[key] = current + max(-max_step, min(max_step, target - current))
         try:
@@ -165,30 +222,32 @@ class DriverNode(rclpy.node.Node):
             return
         self._sent.update(action)
 
-    def _build_camera_info(self) -> CameraInfo:
-        k = self._robot.get_camera_intrinsics()
+    def _camera_info_header(self):
         info = CameraInfo()
         info.header.frame_id = CAMERA_FRAME
-        info.width = self._robot.camera_width
-        info.height = self._robot.camera_height
+        return info.header
+
+    def _build_camera_info(self, k, width, height) -> CameraInfo:
+        info = CameraInfo()
+        info.header.frame_id = CAMERA_FRAME
+        info.width = int(width)
+        info.height = int(height)
         info.distortion_model = "plumb_bob"
         info.d = [0.0] * 5
-        info.k = k.flatten().tolist()
+        info.k = np.asarray(k, dtype=float).flatten().tolist()
         info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-        info.p = [k[0, 0], 0.0, k[0, 2], 0.0, 0.0, k[1, 1], k[1, 2], 0.0, 0.0, 0.0, 1.0, 0.0]
+        info.p = [float(k[0, 0]), 0.0, float(k[0, 2]), 0.0, 0.0, float(k[1, 1]), float(k[1, 2]), 0.0, 0.0, 0.0, 1.0, 0.0]
         return info
 
-    def _build_camera_transform(self) -> TransformStamped:
-        extrinsics = self._robot.get_camera_extrinsics()
-        rotation = extrinsics[:3, :3] @ np.diag([1.0, -1.0, -1.0])
+    def _build_camera_transform(self, rotation, translation) -> TransformStamped:
         quat = np.zeros(4)
-        mujoco.mju_mat2Quat(quat, rotation.flatten())
+        mujoco.mju_mat2Quat(quat, np.ascontiguousarray(rotation, dtype=float).flatten())
         tf = TransformStamped()
         tf.header.stamp = self.get_clock().now().to_msg()
         tf.header.frame_id = "world"
         tf.child_frame_id = CAMERA_FRAME
         tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = (
-            extrinsics[:3, 3].tolist()
+            np.asarray(translation, dtype=float).tolist()
         )
         tf.transform.rotation.w, tf.transform.rotation.x, tf.transform.rotation.y, tf.transform.rotation.z = (
             quat.tolist()
@@ -203,14 +262,39 @@ class DriverNode(rclpy.node.Node):
             start = time.monotonic()
             with self._robot_lock:
                 renderer.update_scene(self._robot.data, camera=self._robot.camera_name)
-            image = self._bridge.cv2_to_imgmsg(renderer.render(), encoding="rgb8")
-            image.header.stamp = self.get_clock().now().to_msg()
-            image.header.frame_id = CAMERA_FRAME
-            self._camera_info.header.stamp = image.header.stamp
-            self._image_pub.publish(image)
-            self._camera_info_pub.publish(self._camera_info)
+            self._publish_image(renderer.render())
             time.sleep(max(0.0, 1.0 / CAMERA_HZ - (time.monotonic() - start)))
         renderer.close()
+
+    def _real_camera_loop(self, address):
+        host, port = address.rsplit(":", 1)
+        while self._camera_running:
+            try:
+                with socket.create_connection((host, int(port)), timeout=5) as conn:
+                    self.get_logger().info(f"Camera connected: {address}")
+                    stream = conn.makefile("rb")
+                    last = 0.0
+                    while self._camera_running:
+                        (length,) = struct.unpack(">I", stream.read(4))
+                        jpeg = stream.read(length)
+                        if time.monotonic() - last < 1.0 / CAMERA_HZ:
+                            continue
+                        last = time.monotonic()
+                        frame = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+                        if self._undistort_maps is not None:
+                            frame = cv2.remap(frame, *self._undistort_maps, cv2.INTER_LINEAR)
+                        self._publish_image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            except (OSError, struct.error) as e:
+                self.get_logger().warn(f"Camera bridge unavailable ({e}), retrying", throttle_duration_sec=5.0)
+                time.sleep(1.0)
+
+    def _publish_image(self, rgb):
+        image = self._bridge.cv2_to_imgmsg(rgb, encoding="rgb8")
+        image.header.stamp = self.get_clock().now().to_msg()
+        image.header.frame_id = CAMERA_FRAME
+        self._camera_info.header.stamp = image.header.stamp
+        self._image_pub.publish(image)
+        self._camera_info_pub.publish(self._camera_info)
 
     def _publish_joint_states(self):
         try:
@@ -224,7 +308,9 @@ class DriverNode(rclpy.node.Node):
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = JOINT_NAMES
-        msg.position = [obs[f"{name}.pos"] for name in JOINT_NAMES[:-1]] + [
+        msg.position = [
+            obs[f"{name}.pos"] - self._joint_offsets.get(name, 0.0) for name in JOINT_NAMES[:-1]
+        ] + [
             _gripper_pct_to_rad(obs["gripper.pos"])
         ]
 

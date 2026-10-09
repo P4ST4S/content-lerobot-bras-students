@@ -17,7 +17,11 @@ grep -q '^USE_SIM=false' .env || echo "Warning: USE_SIM is not false in docker/.
 pkill -f serial_bridge.py 2>/dev/null || true
 "$PYTHON" serial_bridge.py "$DEVICE" "$TCP_PORT" &
 BRIDGE_PID=$!
-trap 'kill $BRIDGE_PID 2>/dev/null' EXIT
+CAMERA_INDEX="$(grep -E '^CAMERA_INDEX=' .env | cut -d= -f2)"
+pkill -f "webcam.py bridge" 2>/dev/null || true
+"$PYTHON" webcam.py bridge --camera "${CAMERA_INDEX:-0}" &
+CAMERA_PID=$!
+trap 'kill $BRIDGE_PID $CAMERA_PID 2>/dev/null' EXIT
 sleep 1
 kill -0 "$BRIDGE_PID" 2>/dev/null || { echo "Bridge failed to start (port $TCP_PORT busy?)"; exit 1; }
 

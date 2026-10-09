@@ -21,6 +21,7 @@ RED_RANGES = [((0, 120, 80), (8, 255, 255)), ((160, 120, 80), (180, 255, 255))]
 BOX_RANGES = [((5, 80, 30), (20, 220, 160))]
 
 OBJECT_HEIGHT = 0.025
+OBJECT_OFFSET = (0.0, 0.0)
 OBJECT_TOP = 0.05
 OBJECT_FAR_EDGE_OFFSET = 0.03
 BOX_HEIGHT = 0.025
@@ -58,6 +59,9 @@ class PerceptionNode(rclpy.node.Node):
         self.get_logger().info("Perception node ready.")
 
     def _cb_camera_info(self, msg: CameraInfo):
+        if msg.k[0] == 0.0:
+            self.get_logger().warn("Camera not calibrated yet, waiting", throttle_duration_sec=10.0)
+            return
         self._k_inv = np.linalg.inv(np.array(msg.k).reshape(3, 3))
         self._camera_frame = msg.header.frame_id
 
@@ -77,6 +81,7 @@ class PerceptionNode(rclpy.node.Node):
                 point[2] = OBJECT_HEIGHT
             else:
                 point = self._project_to_3d(centroid, camera_pose, OBJECT_HEIGHT)
+            point[:2] += OBJECT_OFFSET
             self._publish_result(self._object_pub, point, msg.header.stamp)
 
         blob = self._detect_object(hsv, BOX_RANGES, BOX_MIN_PIXELS)

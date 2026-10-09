@@ -4,5 +4,9 @@
 FROM tek5/control
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb x11vnc novnc websockify openbox \
+    xvfb x11vnc novnc websockify openbox ros-jazzy-camera-calibration \
     && rm -rf /var/lib/apt/lists/*
+
+# The control image ships pip's headless OpenCV, which hides the GUI-enabled
+# python3-opencv needed by the camera_calibration window.
+RUN pip uninstall --break-system-packages -y opencv-python-headless

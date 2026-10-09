@@ -24,6 +24,7 @@ from std_msgs.msg import Empty
 
 URDF_PATH = Path("/opt/so101/sim/so101_sim/assets/so101/so101_new_calib.urdf")
 EE_FRAME = "gripper_frame_link"
+GRASP_OFFSET = (0.0, 0.0, 0.0)
 ROBOT_FRAMES = ("", "world", "base_link")
 DOWN = np.array([0.0, 0.0, -1.0])
 
@@ -39,6 +40,8 @@ DROP_HEIGHT = 0.08
 GRIPPER_OPEN = 100.0
 GRIPPER_CLOSED = 0.0
 REACHED_TOLERANCE = 0.015
+GRASP_TOLERANCE = 0.005
+GRASP_DEPTH = 0.025
 MOTION_TIMEOUT = 8.0
 GRIPPER_WAIT = 1.0
 
@@ -71,8 +74,18 @@ class BrainNode(rclpy.node.Node):
         super().__init__("so101_brain")
 
         self._model = pin.buildModelFromUrdf(str(URDF_PATH))
+        tcp_id = self._model.getFrameId(EE_FRAME)
+        tcp = self._model.frames[tcp_id]
+        self._ee_frame_id = self._model.addFrame(
+            pin.Frame(
+                "grasp_center",
+                tcp.parentJoint,
+                tcp_id,
+                tcp.placement * pin.SE3(np.eye(3), np.array(GRASP_OFFSET)),
+                pin.FrameType.OP_FRAME,
+            )
+        )
         self._data = self._model.createData()
-        self._ee_frame_id = self._model.getFrameId(EE_FRAME)
         self._q = pin.neutral(self._model)
         self._idx_q = {
             name: self._model.joints[self._model.getJointId(name)].idx_q for name in JOINT_NAMES
@@ -161,10 +174,10 @@ class BrainNode(rclpy.node.Node):
 
         elif self._state == State.APPROACH:
             if self._arrived(elapsed):
-                self._move(State.DESCEND, self._pick, GRIPPER_OPEN)
+                self._move(State.DESCEND, self._pick - [0.0, 0.0, GRASP_DEPTH], GRIPPER_OPEN)
 
         elif self._state == State.DESCEND:
-            if self._arrived(elapsed):
+            if self._arrived(elapsed, GRASP_TOLERANCE):
                 self._send_joint_command(self._q, GRIPPER_CLOSED)
                 self._set_state(State.GRASP)
 
@@ -219,8 +232,8 @@ class BrainNode(rclpy.node.Node):
         self._send_joint_command(self._home_q, GRIPPER_OPEN)
         self._set_state(State.RETURN)
 
-    def _arrived(self, elapsed):
-        if np.linalg.norm(self._ee_position - self._target) < REACHED_TOLERANCE:
+    def _arrived(self, elapsed, tolerance=REACHED_TOLERANCE):
+        if np.linalg.norm(self._ee_position - self._target) < tolerance:
             return True
         if elapsed > MOTION_TIMEOUT:
             self.get_logger().warn(

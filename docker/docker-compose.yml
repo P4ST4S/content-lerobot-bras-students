@@ -28,6 +28,7 @@ services:
       USE_SIM: ${USE_SIM:-true}
       REAL_ROBOT_PORT: ${REAL_ROBOT_PORT:-/dev/ttyACM0}
       SERIAL_TCP: ${SERIAL_TCP:-}
+      CAMERA_TCP: ${CAMERA_TCP:-}
       MUJOCO_GL: osmesa
       DISPLAY: ${DISPLAY}
       QT_QPA_PLATFORM: xcb        # robust X11 and XWayland
