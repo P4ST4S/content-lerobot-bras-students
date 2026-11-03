@@ -7,6 +7,8 @@ Never talks to the backend: reads /joint_states, commands through /joint_command
   - Inverse kinematics: /target_position (topic) or /go_to_target (service)
   - Pick & place state machine: reads /object_position and /drop_box_position
     (last known value, never blocks on perception), restart with /start_pick
+  - Drawing: /draw_image (std_msgs/String, image path) -> outlines drawn with a felt pen
+    held in the closed gripper; plan and ink shown in RViz on /drawing/plan, /drawing/ink
 """
 import time
 from enum import Enum
@@ -16,11 +18,14 @@ import numpy as np
 import pinocchio as pin
 import rclpy
 import rclpy.node
-from geometry_msgs.msg import PointStamped, PoseStamped
+from geometry_msgs.msg import Point, PointStamped, PoseStamped
 from rclpy.executors import ExternalShutdownException
 from sensor_msgs.msg import JointState
 from so101_interfaces.srv import GoToTarget
-from std_msgs.msg import Empty
+from std_msgs.msg import ColorRGBA, Empty, String
+from visualization_msgs.msg import Marker
+
+from so101_brain.image_to_strokes import image_to_strokes
 
 URDF_PATH = Path("/opt/so101/sim/so101_sim/assets/so101/so101_new_calib.urdf")
 EE_FRAME = "gripper_frame_link"
@@ -55,8 +60,15 @@ ARM_JOINT_NAMES = [
 JOINT_NAMES = ARM_JOINT_NAMES + ["gripper"]
 
 
+INK_HEIGHT = 0.003  # pen tip closer than this to the paper = leaving ink
+
+
 class State(Enum):
     IDLE = "IDLE"
+    PEN_TRAVEL = "PEN_TRAVEL"
+    PEN_DOWN = "PEN_DOWN"
+    TRACE = "TRACE"
+    PEN_UP = "PEN_UP"
     APPROACH = "APPROACH"
     DESCEND = "DESCEND"
     GRASP = "GRASP"
@@ -100,6 +112,22 @@ class BrainNode(rclpy.node.Node):
         self._pick = None
         self._home_q = None
         self._target = None
+
+        # Drawing. Calibration knobs for the real arm: paper_z (table height under the
+        # paper) and pen_length (felt tip below gripper_frame_link, measured in the gripper).
+        self._paper_z = self.declare_parameter("paper_z", 0.0).value
+        self._pen_length = self.declare_parameter("pen_length", 0.03).value
+        self._pen_lift = self.declare_parameter("pen_lift", 0.02).value
+        self._draw_center = tuple(self.declare_parameter("draw_center", [0.22, 0.0]).value)
+        self._draw_size = self.declare_parameter("draw_size", 0.10).value
+        self._trace_tolerance = self.declare_parameter("trace_tolerance", 0.003).value
+        self._strokes = []
+        self._stroke_i = self._point_i = 0
+        self._ink = []
+        self._last_ink = None
+        self._plan_pub = self.create_publisher(Marker, "drawing/plan", 1)
+        self._ink_pub = self.create_publisher(Marker, "drawing/ink", 1)
+        self.create_subscription(String, "draw_image", self._cb_draw_image, 10)
 
         self._ee_pose_pub = self.create_publisher(PoseStamped, "end_effector_pose", 10)
         self._ee_point_pub = self.create_publisher(PointStamped, "end_effector_point", 10)
@@ -146,6 +174,33 @@ class BrainNode(rclpy.node.Node):
         if self._state in (State.IDLE, State.DONE):
             self._armed = True
             self._set_state(State.IDLE)
+
+    def _cb_draw_image(self, msg: String):
+        if self._state not in (State.IDLE, State.DONE) or self._ee_position is None:
+            self.get_logger().warn(f"Cannot draw now (state {self._state.value})")
+            return
+        try:
+            strokes = image_to_strokes(msg.data, self._draw_center, self._draw_size)
+        except FileNotFoundError as e:
+            self.get_logger().error(str(e))
+            return
+        cx, cy, half = *self._draw_center, self._draw_size / 2
+        for corner in ((cx - half, cy - half), (cx - half, cy + half),
+                       (cx + half, cy - half), (cx + half, cy + half)):
+            _, error = self._solve_ik(self._pen_target(corner), down=True)
+            if error > IK_TOLERANCE:
+                self.get_logger().error(f"Paper corner {np.round(corner, 3)} unreachable, aborting")
+                return
+        self.get_logger().info(
+            f"Drawing {msg.data}: {len(strokes)} strokes, {sum(map(len, strokes))} points"
+        )
+        self._armed = False
+        self._home_q = self._q.copy()
+        self._strokes, self._stroke_i = strokes, 0
+        self._ink, self._last_ink = [], None
+        self._publish_lines(self._plan_pub, [p for s in strokes for p in zip(s[:-1], s[1:])],
+                            ColorRGBA(r=0.6, g=0.6, b=0.6, a=0.6))
+        self._start_stroke()
 
     def _go_to(self, point, frame):
         if self._state not in (State.IDLE, State.DONE):
@@ -203,9 +258,82 @@ class BrainNode(rclpy.node.Node):
             if elapsed > GRIPPER_WAIT:
                 self._go_home()
 
+        elif self._state in (State.PEN_TRAVEL, State.PEN_DOWN, State.TRACE, State.PEN_UP):
+            self._step_drawing(elapsed)
+
         elif self._state == State.RETURN:
             if self._arrived(elapsed):
                 self._set_state(State.DONE)
+
+    # -------------------------------------------------------------- drawing
+
+    def _pen_target(self, xy, lift=0.0):
+        """Gripper frame target putting the pen tip at xy on the paper (pen vertical)."""
+        return np.array([xy[0], xy[1], self._paper_z + self._pen_length + lift])
+
+    def _start_stroke(self):
+        if self._stroke_i >= len(self._strokes):
+            self.get_logger().info("Drawing done")
+            self._go_home(GRIPPER_CLOSED)  # keep holding the pen
+            return
+        self._point_i = 0
+        start = self._strokes[self._stroke_i][0]
+        self._move(State.PEN_TRAVEL, self._pen_target(start, self._pen_lift), GRIPPER_CLOSED)
+
+    def _step_drawing(self, elapsed):
+        self._record_ink()
+        stroke = self._strokes[self._stroke_i]
+        if self._state == State.PEN_TRAVEL:
+            if self._arrived(elapsed):
+                self._move(State.PEN_DOWN, self._pen_target(stroke[0]), GRIPPER_CLOSED)
+        elif self._state == State.PEN_DOWN:
+            if self._arrived(elapsed, self._trace_tolerance):
+                self._set_state(State.TRACE)
+        elif self._state == State.TRACE:
+            if not self._arrived(elapsed, self._trace_tolerance):
+                return
+            self._point_i += 1
+            if self._point_i >= len(stroke):
+                self._move(State.PEN_UP, self._pen_target(stroke[-1], self._pen_lift), GRIPPER_CLOSED)
+                return
+            target = self._pen_target(stroke[self._point_i])
+            q, error = self._solve_ik(target, down=True)
+            if error > IK_TOLERANCE:
+                self.get_logger().warn(f"Skipping unreachable point {np.round(target, 3)}")
+                return
+            self._target = target
+            self._send_joint_command(q, GRIPPER_CLOSED)
+            self._state_start = time.monotonic()  # timeout per point, not per stroke
+        elif self._state == State.PEN_UP:
+            if self._arrived(elapsed):
+                self._stroke_i += 1
+                self._start_stroke()
+
+    def _record_ink(self):
+        ee = self._forward_kinematics(self._q)
+        tip = ee.translation + ee.rotation[:, 2] * self._pen_length
+        if tip[2] > self._paper_z + INK_HEIGHT:
+            self._last_ink = None
+            return
+        if self._last_ink is not None and np.linalg.norm(tip - self._last_ink) > 1e-3:
+            self._ink.append((self._last_ink, tip))
+            self._publish_lines(self._ink_pub, self._ink, ColorRGBA(r=0.05, g=0.05, b=0.05, a=1.0))
+        if self._last_ink is None or np.linalg.norm(tip - self._last_ink) > 1e-3:
+            self._last_ink = tip
+
+    def _publish_lines(self, pub, segments, color):
+        msg = Marker()
+        msg.header.frame_id = "world"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.type = Marker.LINE_LIST
+        msg.scale.x = 0.002
+        msg.color = color
+        msg.pose.orientation.w = 1.0
+        z = self._paper_z + 0.0005
+        for a, b in segments:
+            for p in (a, b):
+                msg.points.append(Point(x=float(p[0]), y=float(p[1]), z=z))
+        pub.publish(msg)
 
     def _set_state(self, state):
         self.get_logger().info(f"State: {self._state.value} -> {state.value}")
@@ -219,7 +347,7 @@ class BrainNode(rclpy.node.Node):
                 f"{state.value}: target {np.round(target, 3)} unreachable "
                 f"({error * 1000:.1f} mm), going home"
             )
-            self._go_home()
+            self._go_home(gripper_pct)
             return
         tilt = np.degrees(np.arccos(np.clip(self._forward_kinematics(q).rotation[:, 2] @ DOWN, -1, 1)))
         self.get_logger().info(f"{state.value}: target {np.round(target, 3)}, gripper tilt {tilt:.0f} deg")
@@ -227,9 +355,9 @@ class BrainNode(rclpy.node.Node):
         self._send_joint_command(q, gripper_pct)
         self._set_state(state)
 
-    def _go_home(self):
+    def _go_home(self, gripper_pct=GRIPPER_OPEN):
         self._target = self._forward_kinematics(self._home_q).translation.copy()
-        self._send_joint_command(self._home_q, GRIPPER_OPEN)
+        self._send_joint_command(self._home_q, gripper_pct)
         self._set_state(State.RETURN)
 
     def _arrived(self, elapsed, tolerance=REACHED_TOLERANCE):

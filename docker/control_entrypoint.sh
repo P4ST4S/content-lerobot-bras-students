@@ -33,7 +33,7 @@ if [ -n "${SERIAL_TCP:-}" ]; then
 fi
 
 launch so101_driver driver.launch.py "use_sim:=${USE_SIM:-true}" "port:=${REAL_ROBOT_PORT:-/dev/ttyACM0}"
-launch so101_brain brain.launch.py
+launch so101_brain brain.launch.py "autostart:=${BRAIN_AUTOSTART:-true}"
 
 shutdown() {
   trap - TERM INT

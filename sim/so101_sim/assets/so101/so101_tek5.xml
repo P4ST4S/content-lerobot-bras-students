@@ -112,6 +112,9 @@
                 <geom type="mesh" class="collision" pos="8.32667e-17 -0.000218214 0.000949706" quat="0 1 0 0" mesh="wrist_roll_follower_so101_v1_body_collision" material="wrist_roll_follower_so101_v1_material"/>
                 <!-- Frame gripperframe -->
                 <site group="3" name="gripperframe" pos="-0.0079 -0.000218121 -0.0981274" quat="0.707107 -0 0.707107 -2.37788e-17"/>
+                <!-- Felt pen (drawing, phase 2): visual only, no contact. Tip 3 cm past gripperframe,
+                     same geometry as pen_link in so101_description/urdf/so101.urdf -->
+                <geom name="pen" type="cylinder" size="0.006 0.06" pos="-0.0079 -0.000218121 -0.0681274" rgba="1 0.55 0 1" contype="0" conaffinity="0" group="2" mass="0"/>
                 <!-- Link moving_jaw_so101_v1 -->
                 <body name="moving_jaw_so101_v1" pos="0.0202 0.0188 -0.0234" quat="0.707107 0.707107 -1.85362e-08 1.85362e-08">
                   <!-- Joint from gripper to moving_jaw_so101_v1 -->
