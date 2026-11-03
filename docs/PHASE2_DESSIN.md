@@ -77,12 +77,26 @@ Elle réutilise ce qui existait : `_solve_ik(down=True)`, `_send_joint_command`,
   (par défaut `true`, comme avant). Avec `false`, le brain attend `/draw_image` au lieu de
   lancer le pick & place dès que l'objet est vu. Elle est documentée dans `.env.example`.
 - Images de test : `ros2_ws/images/star.png` et `ros2_ws/images/smiley.png`.
+- `docker/draw.sh <image>` : lance un dessin en une commande (voir Utilisation).
 
 ## Utilisation (sim)
 
 ```bash
 cd docker
 docker-compose up -d control viz rviz        # RViz : http://localhost:6080/vnc.html
+./draw.sh ../ros2_ws/images/smiley.png       # ou n'importe quelle image : ./draw.sh ~/Desktop/chat.png
+```
+
+`docker/draw.sh <image>` :
+- copie l'image dans `ros2_ws/images/` si elle est ailleurs (le dossier est monté dans le
+  container sous `/ros2_ws/images/`) ;
+- vérifie que le container `control` tourne ;
+- publie le chemin sur `/draw_image` ;
+- affiche les logs du dessin (`Drawing ...`, `Drawing done`, erreurs). Ctrl+C arrête l'affichage des logs, pas le dessin.
+
+Commande équivalente à la main :
+
+```bash
 docker-compose exec control bash -lc 'source /ros2_ws/install/setup.bash && \
   ros2 topic pub -w 1 --once --keep-alive 5 /draw_image std_msgs/msg/String \
   "{data: /ros2_ws/images/smiley.png}"'
