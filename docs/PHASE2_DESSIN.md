@@ -79,6 +79,20 @@ Elle réutilise ce qui existait : `_solve_ik(down=True)`, `_send_joint_command`,
 - Images de test : `ros2_ws/images/star.png` et `ros2_ws/images/smiley.png`.
 - `docker/draw.sh <image>` : lance un dessin en une commande (voir Utilisation).
 
+### 7. Support de feutre (partie 2 : attraper le feutre)
+- `hardware/pen_holder/pen_holder.py` génère `pen_holder.stl` : une base carrée de 60 × 60 × 30 mm,
+  avec 12 languettes flexibles autour d'un trou de Ø 8 mm, et un puits traversant de Ø 16,5 mm qui
+  garde le feutre vertical. La pointe du feutre repose sur la table. Toutes les cotes sont des
+  constantes en haut du script ; il vérifie la pièce lui-même avant d'écrire le STL.
+  ```bash
+  uv run --no-project --with manifold3d --with numpy hardware/pen_holder/pen_holder.py
+  ```
+- Le même STL est copié dans `so101_description/meshes/`. Dans l'URDF, c'est le link fixe
+  `pen_holder_link`, placé en (0.18, 0.15, 0). Pour le déplacer, modifier le `xyz` de `pen_holder_joint`.
+- Impression : à l'envers, la plaque à languettes posée sur le plateau. Le cône à 45° sous les
+  languettes évite les supports. Les languettes font 0,8 mm d'épaisseur ; en PLA, elles risquent
+  de casser au-delà de Ø 12 mm environ. Pour des feutres plus gros, imprimer en PETG ou en TPU.
+
 ## Utilisation (sim)
 
 ```bash

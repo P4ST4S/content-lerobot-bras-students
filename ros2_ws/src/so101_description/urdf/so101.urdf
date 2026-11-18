@@ -332,6 +332,20 @@
     <child link="pen_tip_link"/>
   </joint>
 
+  <!-- Pen holder on the table (phase 2), printed from hardware/pen_holder/pen_holder.py.
+       Mesh in mm, origin at the center of its bottom face. Move it by editing xyz. -->
+  <link name="pen_holder_link">
+    <visual>
+      <geometry><mesh filename="package://so101_description/meshes/pen_holder.stl" scale="0.001 0.001 0.001"/></geometry>
+      <material name="pen_holder"><color rgba="0.2 0.6 0.9 1"/></material>
+    </visual>
+  </link>
+  <joint name="pen_holder_joint" type="fixed">
+    <origin xyz="0.18 0.15 0" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="pen_holder_link"/>
+  </joint>
+
   <!-- Link moving_jaw_so101_v1 -->
   <link name="moving_jaw_so101_v1_link">
     <inertial>
