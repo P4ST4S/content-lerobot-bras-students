@@ -7,6 +7,7 @@ Runs in the rviz container (rclpy, ros2_ws mounted, noVNC files in /usr/share/no
 
 POST /draw               body = raw PNG/JPEG -> saved as images/web_upload.<ext>, published
 POST /draw?sample=X.png  X must already be in images/ -> published
+POST /plan?show=1|0      show/hide the grey planned strokes (/drawing/show_plan)
 Publishes the image path on /draw_image, like docker/draw.sh. No auth: local demo only.
 """
 import sys
@@ -45,7 +46,8 @@ def static_path(url_path: str, root: Path = NOVNC):
 
 
 class Handler(BaseHTTPRequestHandler):
-    publish = None  # set in main()
+    publish = None    # set in main()
+    show_plan = None  # set in main()
 
     def _reply(self, code, body, ctype="text/plain; charset=utf-8"):
         body = body.encode() if isinstance(body, str) else body
@@ -66,9 +68,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         url = urlparse(self.path)
+        query = parse_qs(url.query)
+        if url.path == "/plan":
+            show = query.get("show", ["0"])[0] == "1"
+            Handler.show_plan(show)
+            return self._reply(200, "Plan shown" if show else "Plan hidden")
         if url.path != "/draw":
             return self._reply(404, "Not found")
-        sample = parse_qs(url.query).get("sample", [None])[0]
+        sample = query.get("sample", [None])[0]
         if sample is not None:
             path = sample_path(sample)
             if path is None:
@@ -110,12 +117,14 @@ def selftest():
 
 def main():
     import rclpy
-    from std_msgs.msg import String
+    from std_msgs.msg import Bool, String
 
     rclpy.init()
     node = rclpy.create_node("draw_web")
     pub = node.create_publisher(String, "draw_image", 10)
+    plan_pub = node.create_publisher(Bool, "drawing/show_plan", 10)
     Handler.publish = lambda path: pub.publish(String(data=path))
+    Handler.show_plan = lambda show: plan_pub.publish(Bool(data=show))
     print(f"Draw page on http://localhost:{PORT}", flush=True)
     try:
         ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

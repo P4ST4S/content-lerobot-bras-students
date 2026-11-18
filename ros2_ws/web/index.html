@@ -12,6 +12,7 @@
                          padding: 8px 14px; font-size: 14px; cursor: pointer; }
     button:disabled { opacity: .5; cursor: default; }
     input[type=file] { display: none; }
+    label.toggle { font-size: 14px; display: flex; gap: 6px; align-items: center; cursor: pointer; }
     #status { font-size: 14px; color: #bbb; }
     #status.error { color: #ff8a80; }
     #view { width: 100%; aspect-ratio: 16 / 9; max-height: calc(100vh - 64px); background: #000; }
@@ -23,6 +24,7 @@
     <label class="file">Déposer une image…<input id="file" type="file" accept="image/png,image/jpeg"></label>
     <button data-sample="star.png">Étoile</button>
     <button data-sample="smiley.png">Smiley</button>
+    <label class="toggle"><input id="plan" type="checkbox"> Afficher le plan</label>
     <span id="status" role="status">Connexion à la vue 3D…</span>
   </header>
   <div id="view"></div>
@@ -52,6 +54,13 @@
     }
     document.querySelectorAll('[data-sample]').forEach(b =>
       b.addEventListener('click', () => draw(null, '?sample=' + encodeURIComponent(b.dataset.sample))));
+    // Planned strokes hidden by default: the audience has to guess the drawing.
+    const plan = document.getElementById('plan');
+    const sendPlan = () => fetch('/plan?show=' + (plan.checked ? 1 : 0), { method: 'POST' })
+      .then(r => r.text()).then(t => show(t)).catch(() => show('Serveur injoignable', true));
+    plan.addEventListener('change', sendPlan);
+    fetch('/plan?show=0', { method: 'POST' });  // page (re)loaded: back to hidden, like the checkbox
+
     document.getElementById('file').addEventListener('change', e => {
       const file = e.target.files[0];
       if (file) draw(file);

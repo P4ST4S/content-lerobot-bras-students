@@ -152,6 +152,9 @@ docker-compose up -d control viz rviz        # RViz : http://localhost:6080/vnc.
   Auto-check : `docker-compose exec rviz python3 /ros2_ws/web/server.py --selftest`.
 - `ros2_ws/web/index.html` affiche l'écran de RViz avec le client de noVNC (`core/rfb.js`), sans l'interface de noVNC.
 - RViz tourne en plein écran (`--fullscreen`). Pour retrouver les panneaux, ouvrir noVNC (http://localhost:6080/vnc.html) et appuyer sur F11.
+- Le plan gris (`/drawing/plan`) est masqué par défaut, pour que le public devine le dessin. La case
+  « Afficher le plan » publie sur `/drawing/show_plan` (`std_msgs/Bool`), et le brain renvoie le plan ou un `DELETE`.
+- Les PNG à fond transparent (sites d'icônes) sont posés sur du blanc avant le seuillage (`read_gray` dans `image_to_strokes.py`).
 - Si le bras est occupé, la page affiche quand même « Sent… » : le brain ignore la demande (`Cannot draw now` dans les logs).
 - Attention : ne pas désactiver le display « Image » dans `so101.rviz`. RViz Jazzy refuse alors toute la
   config (`Could not load display config: Invalid argument`). En plein écran, son panneau est de toute façon masqué.
