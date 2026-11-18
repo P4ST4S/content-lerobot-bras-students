@@ -20,8 +20,8 @@ from manifold3d import CrossSection, JoinType, Manifold
 BASE = 60.0        # base side
 HEIGHT = 30.0      # total height
 CORNER_R = 4.0
-GUIDE_D = 16.5     # max pen diameter + clearance
-HOLE_D = 8.0       # finger tips: pens from ~9 mm up get gripped
+GUIDE_D = 12.0     # sized for Sharpie-type markers (~10-11.5 mm): little play, pen stays vertical
+HOLE_D = 8.0       # finger tips: pens from ~8.5 mm up get gripped
 CAVITY_D = 36.0    # finger length = (CAVITY_D - HOLE_D) / 2
 PLATE = 0.8        # finger thickness: 2 layers of 0.4. Thicker = stiffer, but PLA cracks
 N_FINGERS = 12

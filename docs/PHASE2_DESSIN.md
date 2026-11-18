@@ -81,7 +81,7 @@ Elle réutilise ce qui existait : `_solve_ik(down=True)`, `_send_joint_command`,
 
 ### 7. Support de feutre (partie 2 : attraper le feutre)
 - `hardware/pen_holder/pen_holder.py` génère `pen_holder.stl` : une base carrée de 60 × 60 × 30 mm,
-  avec 12 languettes flexibles autour d'un trou de Ø 8 mm, et un puits traversant de Ø 16,5 mm qui
+  avec 12 languettes flexibles autour d'un trou de Ø 8 mm, et un puits traversant de Ø 12 mm (feutres type Sharpie, 10 à 11,5 mm) qui
   garde le feutre vertical. La pointe du feutre repose sur la table. Toutes les cotes sont des
   constantes en haut du script ; il vérifie la pièce lui-même avant d'écrire le STL.
   ```bash
@@ -91,7 +91,7 @@ Elle réutilise ce qui existait : `_solve_ik(down=True)`, `_send_joint_command`,
   `pen_holder_link`, placé en (0.18, 0.15, 0). Pour le déplacer, modifier le `xyz` de `pen_holder_joint`.
 - Impression : à l'envers, la plaque à languettes posée sur le plateau. Le cône à 45° sous les
   languettes évite les supports. Les languettes font 0,8 mm d'épaisseur ; en PLA, elles risquent
-  de casser au-delà de Ø 12 mm environ. Pour des feutres plus gros, imprimer en PETG ou en TPU.
+  de casser si on agrandit le puits pour des feutres plus gros (Posca, Velleda) ; dans ce cas, imprimer en PETG ou en TPU.
 
 ## Utilisation (sim)
 
