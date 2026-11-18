@@ -70,12 +70,24 @@ def order(strokes, start=(0.0, 0.0)):
     return ordered
 
 
+def read_gray(path):
+    """Image file -> grayscale. A transparent background becomes white: icon PNGs store it
+    as transparent black, which would otherwise turn the whole image into one dark blob."""
+    image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise FileNotFoundError(f"Cannot read image '{path}'")
+    if image.ndim == 2:
+        return image
+    gray = cv2.cvtColor(image[:, :, :3], cv2.COLOR_BGR2GRAY)
+    if image.shape[2] == 4:
+        alpha = image[:, :, 3].astype(float) / np.iinfo(image.dtype).max
+        white = np.iinfo(image.dtype).max
+        gray = (gray * alpha + white * (1 - alpha)).astype(image.dtype)
+    return gray
+
+
 def image_to_strokes(path_or_image, center=(0.22, 0.0), size=0.10):
-    image = path_or_image
-    if isinstance(path_or_image, str):
-        image = cv2.imread(path_or_image, cv2.IMREAD_GRAYSCALE)
-        if image is None:
-            raise FileNotFoundError(f"Cannot read image '{path_or_image}'")
+    image = read_gray(path_or_image) if isinstance(path_or_image, str) else path_or_image
     outlines, shape = load_contours(image)
     strokes = [resample(s) for s in to_paper(outlines, shape, center, size)]
     return order(strokes, start=center)
@@ -96,7 +108,16 @@ def _self_check():
     # circle is top-left in the image -> +X (far) and +Y (robot's left)
     circle = min(strokes, key=lambda s: np.ptp(s[:, 0]))  # 80 px wide vs 100 px square
     assert circle[:, 0].mean() > center[0] and circle[:, 1].mean() > center[1]
-    print(f"OK: {len(strokes)} strokes, {len(pts)} points")
+    # transparent PNG (icon sites): background is transparent black, the disc must still win
+    import tempfile, os
+    rgba = np.zeros((200, 200, 4), np.uint8)
+    cv2.circle(rgba, (100, 100), 60, (0, 0, 0, 255), -1)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "icon.png")
+        cv2.imwrite(path, rgba)
+        disc = np.vstack(image_to_strokes(path, center, size))
+    assert abs(np.ptp(disc[:, 0]) - size * 120 / 200) < 0.003, "transparent background drawn"
+    print(f"OK: {len(strokes)} strokes, {len(pts)} points, transparent PNG OK")
 
 
 if __name__ == "__main__":

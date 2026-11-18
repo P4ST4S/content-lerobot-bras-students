@@ -5,3 +5,6 @@ log/
 
 
 core
+
+# Image dropped on the web page (ros2_ws/web/server.py)
+images/web_upload.*

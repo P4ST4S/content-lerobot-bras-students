@@ -97,15 +97,17 @@ services:
     volumes:
       - ../ros2_ws:/ros2_ws
     networks: [rosnet]
-    ports: ["6080:6080"]
+    ports: ["6080:6080", "8080:8080"]  # 6080: noVNC (full RViz, F11 leaves fullscreen), 8080: draw page
+    # rm: stale X lock left by a restart. sleep: x11vnc must start once Xvfb is up.
     command: >
-      bash -lc "Xvfb :1 -screen 0 1600x900x24 & sleep 1 &&
+      bash -lc "rm -f /tmp/.X1-lock; Xvfb :1 -screen 0 1280x720x24 & sleep 2;
       openbox & x11vnc -display :1 -forever -shared -nopw -quiet &
       websockify --web /usr/share/novnc 6080 localhost:5900 &
       source /opt/ros/jazzy/setup.bash &&
       until [ -f /ros2_ws/install/setup.bash ]; do echo 'waiting for build (control)...'; sleep 1; done &&
       source /ros2_ws/install/setup.bash &&
-      while true; do rviz2 -d /ros2_ws/so101.rviz; sleep 1; done"
+      { python3 /ros2_ws/web/server.py & } &&
+      while true; do rviz2 --fullscreen -d /ros2_ws/so101.rviz; sleep 1; done"
 
 networks:
   rosnet:

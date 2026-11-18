@@ -21,7 +21,7 @@ from geometry_msgs.msg import Point, PointStamped, PoseStamped
 from rclpy.executors import ExternalShutdownException
 from sensor_msgs.msg import JointState
 from so101_interfaces.srv import GoToTarget
-from std_msgs.msg import ColorRGBA, String
+from std_msgs.msg import Bool, ColorRGBA, String
 from visualization_msgs.msg import Marker
 
 from so101_brain.image_to_strokes import image_to_strokes
@@ -132,6 +132,10 @@ class BrainNode(rclpy.node.Node):
         self._ink = []
         self._last_ink = None
         self._plan_pub = self.create_publisher(Marker, "drawing/plan", 1)
+        # Hidden by default so the audience guesses what is being drawn (web page checkbox).
+        self._show_plan = False
+        self._plan_segments = []
+        self.create_subscription(Bool, "drawing/show_plan", self._cb_show_plan, 10)
         self._ink_pub = self.create_publisher(Marker, "drawing/ink", 1)
         self._pen_pub = self.create_publisher(Marker, "drawing/pen", 1)
         self.create_subscription(String, "draw_image", self._cb_draw_image, 10)
@@ -192,12 +196,27 @@ class BrainNode(rclpy.node.Node):
         self._home_q = self._q.copy()
         self._strokes, self._stroke_i = strokes, 0
         self._ink, self._last_ink = [], None
-        self._publish_lines(self._plan_pub, [p for s in strokes for p in zip(s[:-1], s[1:])],
-                            ColorRGBA(r=0.6, g=0.6, b=0.6, a=0.6))
+        self._plan_segments = [p for s in strokes for p in zip(s[:-1], s[1:])]
+        self._publish_plan()
         if self._pen_held:
             self._start_stroke()
         else:
             self._move(State.PEN_FETCH, self._holder_target(self._above_pen_z()), GRIPPER_OPEN)
+
+    def _cb_show_plan(self, msg: Bool):
+        self._show_plan = msg.data
+        self._publish_plan()
+
+    def _publish_plan(self):
+        """Grey planned strokes in RViz, or a DELETE when hidden or nothing is planned."""
+        if self._show_plan and self._plan_segments:
+            self._publish_lines(self._plan_pub, self._plan_segments,
+                                ColorRGBA(r=0.6, g=0.6, b=0.6, a=0.6))
+            return
+        msg = Marker()
+        msg.header.frame_id = "world"
+        msg.action = Marker.DELETE
+        self._plan_pub.publish(msg)
 
     def _go_to(self, point, frame):
         if self._state not in (State.IDLE, State.DONE):
