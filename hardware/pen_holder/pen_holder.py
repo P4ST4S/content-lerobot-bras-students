@@ -2,7 +2,8 @@
 
 Generates the STL used both for 3D printing and as the RViz mesh:
     uv run --with manifold3d --with numpy hardware/pen_holder/pen_holder.py
-Writes pen_holder.stl here and into ros2_ws/src/so101_description/meshes/, plus
+Writes pen_holder.stl here, into ros2_ws/src/so101_description/meshes/ (RViz) and into
+sim/so101_sim/assets/so101/assets/ (MuJoCo), plus
 pen_holder_print.stl: same part flipped for printing (send this one to the slicer).
 
 Geometry (mm, origin = center of the bottom face, z up as it sits on the table):
@@ -30,7 +31,8 @@ SEGMENTS = 96
 
 HERE = Path(__file__).resolve().parent
 OUTPUTS = [HERE / "pen_holder.stl",
-           HERE.parents[1] / "ros2_ws/src/so101_description/meshes/pen_holder.stl"]
+           HERE.parents[1] / "ros2_ws/src/so101_description/meshes/pen_holder.stl",
+           HERE.parents[1] / "sim/so101_sim/assets/so101/assets/pen_holder.stl"]
 
 
 def build():

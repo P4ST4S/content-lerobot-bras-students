@@ -36,14 +36,12 @@ class SO101Sim:
         camera_width: int = 320,
         camera_height: int = 240,
         sim_dt_per_step: int = 5,
-        seed: int | None = None,
     ):
         self.scene_path = str(scene_path)
         self.camera_name = camera_name
         self.camera_width = camera_width
         self.camera_height = camera_height
         self.sim_dt_per_step = sim_dt_per_step
-        self._rng = np.random.default_rng(seed)
 
         self.model: mujoco.MjModel | None = None
         self.data: mujoco.MjData | None = None
@@ -71,7 +69,6 @@ class SO101Sim:
         self._gripper_range = (float(g_jnt.range[0]), float(g_jnt.range[1]))
 
         mujoco.mj_forward(self.model, self.data)
-        self.randomize_object()
         self._connected = True
         self._last_step_t = time.perf_counter()
 
@@ -123,28 +120,6 @@ class SO101Sim:
             )
         self._renderer.update_scene(self.data, camera=self.camera_name)
         return self._renderer.render()
-
-    def randomize_object(self, radius_range=(0.18, 0.30), angle_range_deg=(-50, 60)) -> None:
-        """Moves pickup_object to a reachable position, with a random yaw."""
-        r = self._rng.uniform(*radius_range)
-        a = np.radians(self._rng.uniform(*angle_range_deg))
-        yaw = self._rng.uniform(0, np.pi / 2)  # the cube is invariant under 90° rotation
-        adr = self.model.joint("pickup_object_free").qposadr[0]
-        self.data.qpos[adr : adr + 3] = [r * np.cos(a), r * np.sin(a), 0.03]
-        self.data.qpos[adr + 3 : adr + 7] = [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
-        self.data.qvel[:] = 0
-        # let the object settle on the ground (physics settling)
-        for _ in range(200):
-            mujoco.mj_step(self.model, self.data)
-
-    def get_object_position(self) -> np.ndarray:
-        """World position of the object — DEBUG/EVALUATION only.
-        Forbidden in the pipeline: the position must come from perception."""
-        return self.data.body("pickup_object").xpos.copy()
-
-    def get_drop_box_position(self) -> np.ndarray:
-        """World position of the drop_box."""
-        return self.data.body("drop_box").xpos.copy()
 
     def get_camera_extrinsics(self) -> np.ndarray:
         """Camera->world pose (4x4). This is the 'provided TF' of the subject."""

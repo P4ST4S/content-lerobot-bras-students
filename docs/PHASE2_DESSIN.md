@@ -89,6 +89,13 @@ Elle réutilise ce qui existait : `_solve_ik(down=True)`, `_send_joint_command`,
   ```
 - Le même STL est copié dans `so101_description/meshes/`. Dans l'URDF, c'est le link fixe
   `pen_holder_link`, placé en (0.18, 0.15, 0). Pour le déplacer, modifier le `xyz` de `pen_holder_joint`.
+- MuJoCo (`scene_tek5.xml`) : body statique `pen_holder` à la même position. Le mesh sert à
+  l'affichage ; les collisions passent par 4 boîtes qui laissent un puits carré de 12 mm ouvert.
+  (Une collision sur le mesh utiliserait son enveloppe convexe, ce qui boucherait le trou.)
+  Déplacer le support = modifier les deux fichiers.
+- Sur cette branche, le cube et la boîte du pick & place ont été retirés de la scène MuJoCo, et
+  `randomize_object` / `get_object_position` / `get_drop_box_position` de `SO101Sim`. Le pick & place
+  reste sur `main`. Après un changement dans `sim/`, il faut reconstruire l'image : `docker-compose build control`.
 - Impression : à l'envers, la plaque à languettes posée sur le plateau. Le cône à 45° sous les
   languettes évite les supports. Les languettes font 0,8 mm d'épaisseur ; en PLA, elles risquent
   de casser si on agrandit le puits pour des feutres plus gros (Posca, Velleda) ; dans ce cas, imprimer en PETG ou en TPU.

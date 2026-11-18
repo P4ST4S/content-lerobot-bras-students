@@ -48,10 +48,4 @@ def generate_launch_description():
             executable="joint_state_publisher",
             condition=IfCondition(LaunchConfiguration("demo")),
         ),
-        # drop_box marker: semi-transparent red cube in RViz, position from MuJoCo
-        Node(
-            package="so101_description",
-            executable="drop_box_marker_pub",
-            name="drop_box_marker_pub",
-        ),
     ])

@@ -18,9 +18,4 @@ setup(
     zip_safe=True,
     description="URDF SO-ARM101 + launch de visualisation (fourni).",
     license="Apache-2.0",
-    entry_points={
-        "console_scripts": [
-            "drop_box_marker_pub = so101_description.drop_box_marker_pub:main",
-        ],
-    },
 )
