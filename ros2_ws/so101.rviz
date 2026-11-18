@@ -171,6 +171,19 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /drawing/ink
       Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Felt pen
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /drawing/pen
+      Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
       Max Value: 1

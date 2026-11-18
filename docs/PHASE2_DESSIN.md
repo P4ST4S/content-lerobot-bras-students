@@ -1,17 +1,21 @@
 # Phase 2 : le bras qui dessine
 
-Branche : `phase-2`. À partir d'une image (PNG/JPG), le SO-ARM101 dessine les contours
-avec un feutre serré dans la pince. Ça marche en sim (trace visible dans RViz) et ça
-passera sur le vrai bras via `use_sim:=false`, une fois les deux paramètres de calibration réglés.
+Branche : `phase-2`. À partir d'une image (PNG/JPG), le SO-ARM101 va chercher un feutre
+debout dans son support, le sort, dessine les contours, remet le feutre dans le support et
+rentre à la maison. Ça marche en sim (trace visible dans RViz). Pour le vrai bras
+(`use_sim:=false`), voir « Passer au vrai bras ».
 
 ```
 image.png ──► image_to_strokes ──► traits XY (m, repère robot)
                                         │
-/draw_image (String) ──► brain_node ────┤ IK pinocchio (stylo vertical)
+/draw_image (String) ──► brain_node ────┤ IK pinocchio (feutre vertical)
                                         ▼
                               /joint_command ──► driver (sim ou réel)
-                              /drawing/plan, /drawing/ink ──► RViz
+                              /drawing/plan, /drawing/ink, /drawing/pen ──► RViz
 ```
+
+Les points 1 à 6 décrivent la première étape (feutre déjà dans la pince). Les points 7 et 8
+décrivent la deuxième (support, saisie et dépose) et remplacent ce qui est dit du feutre aux points 1, 2 et 6.
 
 ## Ce qui a été fait, point par point
 
@@ -80,7 +84,8 @@ Elle réutilise ce qui existait : `_solve_ik(down=True)`, `_send_joint_command`,
 - `docker/draw.sh <image>` : lance un dessin en une commande (voir Utilisation).
 
 ### 7. Support de feutre (partie 2 : attraper le feutre)
-- `hardware/pen_holder/pen_holder.py` génère `pen_holder.stl` : une base carrée de 60 × 60 × 30 mm,
+- `hardware/pen_holder/pen_holder.py` génère `pen_holder.stl` : une base carrée de 60 × 60 × 20 mm
+  (basse exprès, voir point 8),
   avec 12 languettes flexibles autour d'un trou de Ø 8 mm, et un puits traversant de Ø 12 mm (feutres type Sharpie, 10 à 11,5 mm) qui
   garde le feutre vertical. La pointe du feutre repose sur la table. Toutes les cotes sont des
   constantes en haut du script ; il vérifie la pièce lui-même avant d'écrire le STL.
@@ -99,6 +104,39 @@ Elle réutilise ce qui existait : `_solve_ik(down=True)`, `_send_joint_command`,
 - Impression : à l'envers, la plaque à languettes posée sur le plateau. Le cône à 45° sous les
   languettes évite les supports. Les languettes font 0,8 mm d'épaisseur ; en PLA, elles risquent
   de casser si on agrandit le puits pour des feutres plus gros (Posca, Velleda) ; dans ce cas, imprimer en PETG ou en TPU.
+
+### 8. Attraper, dessiner, reposer
+**Le feutre doit être court : 9 cm maximum** (en sim : Ø 11 × 88 mm). Tenu vertical dans la
+pince, il ne reste qu'environ 45 mm de place au-dessus du point de saisie avant de taper dans
+le moteur de la pince. Et l'IK ne garde la pince verticale (< 3°) qu'avec le point de saisie à
+8 cm de haut ou moins. Un Sharpie de 136 mm ne passe donc pas.
+
+- **L'idée :** dans le support, la pointe du feutre touche la table. Si on le saisit avec la pince
+  à la hauteur `pen_length`, la pointe se retrouve à `pen_length` sous la pince. `pen_length` est
+  donc la hauteur de saisie (0.05 par défaut), il n'y a rien à mesurer sur le feutre.
+- **Séquence** (`brain_node.py`, mouvements verticaux au-dessus du support) :
+  - `PEN_FETCH` (au-dessus du feutre, pince ouverte), `PEN_REACH` (descente à `pen_length`),
+    `PEN_GRIP` (fermeture), `PEN_EXTRACT` (pointe 1 cm au-dessus du support), puis le dessin ;
+  - à la fin : `PEN_STOW`, `PEN_INSERT` (pointe 2 mm au-dessus de la table), `PEN_RELEASE`
+    (ouverture), `PEN_LEAVE`, puis `RETURN` et `DONE`.
+  On peut relancer `/draw_image` tout de suite : le cycle se rejoue.
+- **Nouveaux paramètres :** `pen_holder_xy` ([0.18, 0.15], la même position que l'URDF et la
+  scène), `holder_height` (0.02) et `pen_total` (0.088, longueur du feutre). `_cb_draw_image` vérifie
+  aussi par IK que le support est atteignable avant de commencer.
+- **`GRASP_OFFSET` :** `gripper_frame_link` est posé sur la face de la mâchoire fixe. L'IK vise
+  donc un point décalé de (-4.2, +1.3, 0) mm, l'axe du feutre serré entre les mâchoires (valeur mesurée en sim).
+- **RViz :** le feutre n'est plus dans l'URDF. Le brain le publie sur `/drawing/pen` (display
+  « Felt pen ») : dans la pince quand il est tenu, debout dans le support sinon.
+- **MuJoCo :** le feutre est un corps libre (`pen`), tenu **seulement par le frottement**
+  (pas de soudure). Pour que la pince le serre vraiment, trois réglages ont été nécessaires :
+  - deux patins plats (`fixed_jaw_pad`, `moving_jaw_pad`) sur les mâchoires. Les enveloppes convexes
+    des mâchoires sont à facettes et faisaient rouler le feutre hors de la pince ;
+  - des bits de collision : le feutre (bit 2) ne touche que les patins, le sol et le support,
+    pas les enveloppes du bras ;
+  - `solref="0.004 1"` sur le feutre et les patins (contact raide : le servo serre à environ 45 N), et
+    `noslip_iterations="5"` (le solveur anti-glissement de MuJoCo).
+  Résultat mesuré : le feutre penche de 0,8° dans la pince et glisse de moins de 1 mm pendant un dessin.
+- `autostart` / `BRAIN_AUTOSTART` ont été retirés : le brain attend toujours `/draw_image`.
 
 ## Utilisation (sim)
 
@@ -133,14 +171,21 @@ docker-compose exec control bash -lc 'source /ros2_ws/install/setup.bash && \
   à moins de 3 mm (`trace_tolerance`), avec une inclinaison du feutre de 0°.
 - Dans RViz, le feutre est au bout de la pince et la trace noire dessine bien la forme.
 
+- Attraper, dessiner, reposer (point 8) : smiley et étoile, deux cycles d'affilée, sans timeout ;
+  le feutre revient debout dans le support.
+
 ## Passer au vrai bras
-1. Serrer le feutre dans la pince, le bout environ 3 cm après les mors, et mesurer la longueur qui dépasse → `pen_length`.
-2. Scotcher la feuille autour de (0.22, 0.0).
-3. `paper_z` : envoyer `/target_position` à `z = paper_z + pen_length` et descendre par pas
-   de 2 mm jusqu'à ce que le feutre touche juste le papier.
-4. `USE_SIM=false BRAIN_AUTOSTART=false` dans `docker/.env`, puis lancer avec les
-   valeurs mesurées (`ros2 param set /so101_brain paper_z ...`).
-5. Si les servos n'arrivent jamais à 3 mm près (on verra des timeouts dans les logs), monter `trace_tolerance`.
+1. Prendre un feutre de 9 cm maximum, Ø 10 à 11,5 mm, et mettre sa longueur dans `pen_total`.
+2. Scotcher le support et mesurer sa position dans le repère du robot → `pen_holder_xy`.
+3. Scotcher la feuille autour de (0.22, 0.0).
+4. Sans feutre, envoyer `/target_position` au-dessus du support, à `z = pen_length` (0.05), pour vérifier que les
+   mâchoires entourent bien la place du feutre, sans toucher le support.
+5. `paper_z` : une fois le feutre saisi, envoyer `/target_position` à `z = paper_z + pen_length` et descendre par
+   pas de 2 mm jusqu'à ce que le feutre touche juste le papier.
+6. `USE_SIM=false` dans `docker/.env`, puis lancer avec les valeurs mesurées
+   (`ros2 param set /so101_brain paper_z ...`).
+7. `GRASP_OFFSET` est une valeur mesurée en sim : si les traits sont décalés d'un ou deux mm, la mesurer sur le vrai bras.
+8. Si les servos n'arrivent jamais à 3 mm près (on verra des timeouts dans les logs), monter `trace_tolerance`.
 
 ## Limites connues / suite
 - **Contours, pas squelette** : un trait épais dans l'image est dessiné deux fois (un passage

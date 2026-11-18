@@ -306,31 +306,8 @@
     <axis xyz="0 0 0"/>
   </joint>
 
-  <!-- Felt pen held in the gripper (drawing, phase 2). gripper_frame_link z points
-       toward the tip; tip 3 cm past the frame = brain_node pen_length default. -->
-  <link name="pen_link">
-    <visual>
-      <origin xyz="0 0 -0.03" rpy="0 0 0"/>
-      <geometry><cylinder radius="0.006" length="0.12"/></geometry>
-      <material name="pen_body"><color rgba="1.0 0.55 0.0 1"/></material>
-    </visual>
-    <visual>
-      <origin xyz="0 0 0.027" rpy="0 0 0"/>
-      <geometry><sphere radius="0.003"/></geometry>
-      <material name="pen_tip"><color rgba="0.05 0.05 0.05 1"/></material>
-    </visual>
-  </link>
-  <joint name="pen_joint" type="fixed">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <parent link="gripper_frame_link"/>
-    <child link="pen_link"/>
-  </joint>
-  <link name="pen_tip_link"/>
-  <joint name="pen_tip_joint" type="fixed">
-    <origin xyz="0 0 0.03" rpy="0 0 0"/>
-    <parent link="gripper_frame_link"/>
-    <child link="pen_tip_link"/>
-  </joint>
+  <!-- The felt pen is not in the URDF (it is not always in the gripper): brain_node
+       publishes it as a Marker on /drawing/pen. -->
 
   <!-- Pen holder on the table (phase 2), printed from hardware/pen_holder/pen_holder.py.
        Mesh in mm, origin at the center of its bottom face. Move it by editing xyz. -->

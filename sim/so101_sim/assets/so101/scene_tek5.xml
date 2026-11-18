@@ -1,5 +1,7 @@
 <mujoco model="tek5_pick_and_place">
     <include file="so101_tek5.xml" />
+    <!-- noslip: keeps the pen from sliding in the jaws (grasp held by friction only) -->
+    <option noslip_iterations="5" />
 
     <visual>
         <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0" />
@@ -19,7 +21,7 @@
     <worldbody>
         <light pos="0 0 2.5" dir="0 0 -1" directional="true" />
         <light pos="0.5 0.5 1.5" dir="-0.3 -0.3 -1" diffuse="0.4 0.4 0.4" />
-        <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="groundplane" />
+        <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="groundplane" conaffinity="3" />
 
         <!-- Pen holder (phase 2), from hardware/pen_holder/pen_holder.py. Same pose as
              pen_holder_joint in so101_description/urdf/so101.urdf. Static. Rendered with the
@@ -28,10 +30,22 @@
         <body name="pen_holder" pos="0.18 0.15 0">
             <geom name="pen_holder_visual" type="mesh" mesh="pen_holder" material="pen_holder_mat"
                 contype="0" conaffinity="0" group="2" />
-            <geom type="box" size="0.012 0.03 0.015" pos="0.018 0 0.015" group="3" />
-            <geom type="box" size="0.012 0.03 0.015" pos="-0.018 0 0.015" group="3" />
-            <geom type="box" size="0.006 0.012 0.015" pos="0 0.018 0.015" group="3" />
-            <geom type="box" size="0.006 0.012 0.015" pos="0 -0.018 0.015" group="3" />
+            <geom type="box" size="0.012 0.03 0.01" pos="0.018 0 0.01" group="3" conaffinity="3" />
+            <geom type="box" size="0.012 0.03 0.01" pos="-0.018 0 0.01" group="3" conaffinity="3" />
+            <geom type="box" size="0.006 0.012 0.01" pos="0 0.018 0.01" group="3" conaffinity="3" />
+            <geom type="box" size="0.006 0.012 0.01" pos="0 -0.018 0.01" group="3" conaffinity="3" />
+        </body>
+
+        <!-- Felt pen, 11 x 88 mm: free body standing in the holder, tip on the floor, held by
+             jaw friction only (bit 2: touches the jaw pads, floor and holder, not the arm
+             hulls). Short on purpose: held vertically, at most ~45 mm of pen fits above
+             the grasp point before it hits the gripper motor (brain_node pen_total). -->
+        <body name="pen" pos="0.18 0.15 0.044">
+            <freejoint name="pen_free" />
+            <geom name="pen_body" type="cylinder" size="0.0055 0.044" rgba="1 0.55 0 1"
+                mass="0.01" friction="1.0 0.005 0.0001" condim="6" contype="2" conaffinity="2" solref="0.004 1" />
+            <geom name="pen_tip" type="sphere" size="0.003" pos="0 0 -0.042" rgba="0.05 0.05 0.05 1"
+                contype="0" conaffinity="0" mass="0" />
         </body>
 
         <!-- Fixed external camera (eye-to-hand), KNOWN pose: this is the reference

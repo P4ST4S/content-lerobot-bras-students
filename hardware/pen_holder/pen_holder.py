@@ -19,7 +19,7 @@ import numpy as np
 from manifold3d import CrossSection, JoinType, Manifold
 
 BASE = 60.0        # base side
-HEIGHT = 30.0      # total height
+HEIGHT = 20.0      # total height. Low on purpose: the arm must lift the pen out while vertical
 CORNER_R = 4.0
 GUIDE_D = 12.0     # sized for Sharpie-type markers (~10-11.5 mm): little play, pen stays vertical
 HOLE_D = 8.0       # finger tips: pens from ~8.5 mm up get gripped

@@ -26,7 +26,6 @@ services:
     environment:
       <<: *ros-env
       USE_SIM: ${USE_SIM:-true}
-      BRAIN_AUTOSTART: ${BRAIN_AUTOSTART:-true}  # false = drawing mode (no pick & place)
       REAL_ROBOT_PORT: ${REAL_ROBOT_PORT:-/dev/ttyACM0}
       SERIAL_TCP: ${SERIAL_TCP:-}
       CAMERA_TCP: ${CAMERA_TCP:-}

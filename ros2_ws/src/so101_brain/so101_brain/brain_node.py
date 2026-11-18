@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""brain_node.py - intelligence of the arm: kinematics, then pick & place.
+"""brain_node.py - intelligence of the arm: kinematics, then drawing.
 
 Never talks to the backend: reads /joint_states, commands through /joint_command.
 
   - Forward kinematics: /end_effector_pose and /end_effector_point from /joint_states
   - Inverse kinematics: /target_position (topic) or /go_to_target (service)
-  - Pick & place state machine: reads /object_position and /drop_box_position
-    (last known value, never blocks on perception), restart with /start_pick
-  - Drawing: /draw_image (std_msgs/String, image path) -> outlines drawn with a felt pen
-    held in the closed gripper; plan and ink shown in RViz on /drawing/plan, /drawing/ink
+  - Drawing: /draw_image (std_msgs/String, image path) -> takes the felt pen out of its
+    holder, draws the outlines, puts the pen back. Plan, ink and pen shown in RViz on
+    /drawing/plan, /drawing/ink, /drawing/pen. (Pick & place lives on the main branch.)
 """
 import time
 from enum import Enum
@@ -22,14 +21,17 @@ from geometry_msgs.msg import Point, PointStamped, PoseStamped
 from rclpy.executors import ExternalShutdownException
 from sensor_msgs.msg import JointState
 from so101_interfaces.srv import GoToTarget
-from std_msgs.msg import ColorRGBA, Empty, String
+from std_msgs.msg import ColorRGBA, String
 from visualization_msgs.msg import Marker
 
 from so101_brain.image_to_strokes import image_to_strokes
 
 URDF_PATH = Path("/opt/so101/sim/so101_sim/assets/so101/so101_new_calib.urdf")
 EE_FRAME = "gripper_frame_link"
-GRASP_OFFSET = (0.0, 0.0, 0.0)
+# gripper_frame_link sits on the fixed jaw face; its -x points to the moving jaw. The IK
+# targets the axis of an 11 mm pen squeezed between the jaws, as measured in the sim
+# (squeezed 1.3 mm into the pad). shortcut: sim value, re-measure on the real arm.
+GRASP_OFFSET = (-0.0042, 0.0013, 0.0)
 ROBOT_FRAMES = ("", "world", "base_link")
 DOWN = np.array([0.0, 0.0, -1.0])
 
@@ -40,15 +42,15 @@ IK_MAX_STEP = 0.2
 IK_RESTARTS = 10
 
 STATE_HZ = 10.0
-HOVER_HEIGHT = 0.08
-DROP_HEIGHT = 0.08
 GRIPPER_OPEN = 100.0
 GRIPPER_CLOSED = 0.0
 REACHED_TOLERANCE = 0.015
 GRASP_TOLERANCE = 0.005
-GRASP_DEPTH = 0.025
 MOTION_TIMEOUT = 8.0
 GRIPPER_WAIT = 1.0
+PEN_ABOVE_MARGIN = 0.012  # jaw tips above the pen top when coming down onto it
+HOLDER_CLEARANCE = 0.01   # pen tip above the holder top once pulled out
+INSERT_GAP = 0.002        # pen tip above the table when dropped back in the holder
 
 ARM_JOINT_NAMES = [
     "shoulder_pan",
@@ -69,18 +71,20 @@ class State(Enum):
     PEN_DOWN = "PEN_DOWN"
     TRACE = "TRACE"
     PEN_UP = "PEN_UP"
-    APPROACH = "APPROACH"
-    DESCEND = "DESCEND"
-    GRASP = "GRASP"
-    LIFT = "LIFT"
-    TRANSPORT = "TRANSPORT"
-    RELEASE = "RELEASE"
+    PEN_FETCH = "PEN_FETCH"
+    PEN_REACH = "PEN_REACH"
+    PEN_GRIP = "PEN_GRIP"
+    PEN_EXTRACT = "PEN_EXTRACT"
+    PEN_STOW = "PEN_STOW"
+    PEN_INSERT = "PEN_INSERT"
+    PEN_RELEASE = "PEN_RELEASE"
+    PEN_LEAVE = "PEN_LEAVE"
     RETURN = "RETURN"
     DONE = "DONE"
 
 
 class BrainNode(rclpy.node.Node):
-    """Brain of the arm: kinematics, then pick & place."""
+    """Brain of the arm: kinematics, then drawing."""
 
     def __init__(self):
         super().__init__("so101_brain")
@@ -106,17 +110,19 @@ class BrainNode(rclpy.node.Node):
 
         self._state = State.IDLE
         self._state_start = time.monotonic()
-        self._armed = self.declare_parameter("autostart", True).value
-        self._object = None
-        self._box = None
-        self._pick = None
         self._home_q = None
         self._target = None
 
         # Drawing. Calibration knobs for the real arm: paper_z (table height under the
-        # paper) and pen_length (felt tip below gripper_frame_link, measured in the gripper).
+        # paper) and pen_holder_xy (holder position, measured in the robot frame).
+        # The pen stands in the holder with its tip on the table, so grasping it with the
+        # gripper frame at height pen_length leaves the tip pen_length below the gripper.
         self._paper_z = self.declare_parameter("paper_z", 0.0).value
-        self._pen_length = self.declare_parameter("pen_length", 0.03).value
+        self._pen_length = self.declare_parameter("pen_length", 0.05).value
+        self._pen_total = self.declare_parameter("pen_total", 0.088).value
+        self._pen_holder_xy = tuple(self.declare_parameter("pen_holder_xy", [0.18, 0.15]).value)
+        self._holder_height = self.declare_parameter("holder_height", 0.02).value
+        self._pen_held = False
         self._pen_lift = self.declare_parameter("pen_lift", 0.02).value
         self._draw_center = tuple(self.declare_parameter("draw_center", [0.22, 0.0]).value)
         self._draw_size = self.declare_parameter("draw_size", 0.10).value
@@ -127,6 +133,7 @@ class BrainNode(rclpy.node.Node):
         self._last_ink = None
         self._plan_pub = self.create_publisher(Marker, "drawing/plan", 1)
         self._ink_pub = self.create_publisher(Marker, "drawing/ink", 1)
+        self._pen_pub = self.create_publisher(Marker, "drawing/pen", 1)
         self.create_subscription(String, "draw_image", self._cb_draw_image, 10)
 
         self._ee_pose_pub = self.create_publisher(PoseStamped, "end_effector_pose", 10)
@@ -136,9 +143,6 @@ class BrainNode(rclpy.node.Node):
         self.create_service(GoToTarget, "go_to_target", self._cb_go_to_target)
         self.create_subscription(PointStamped, "target_position", self._cb_target_position, 10)
 
-        self.create_subscription(PoseStamped, "object_position", self._cb_object, 10)
-        self.create_subscription(PoseStamped, "drop_box_position", self._cb_box, 10)
-        self.create_subscription(Empty, "start_pick", self._cb_start_pick, 10)
         self.create_timer(1.0 / STATE_HZ, self._step)
 
         self.get_logger().info("Brain node ready.")
@@ -162,19 +166,6 @@ class BrainNode(rclpy.node.Node):
         log = self.get_logger().info if success else self.get_logger().warn
         log(f"Target ({msg.point.x:.3f}, {msg.point.y:.3f}, {msg.point.z:.3f}): {message}")
 
-    def _cb_object(self, msg: PoseStamped):
-        p = msg.pose.position
-        self._object = np.array([p.x, p.y, p.z])
-
-    def _cb_box(self, msg: PoseStamped):
-        p = msg.pose.position
-        self._box = np.array([p.x, p.y, p.z])
-
-    def _cb_start_pick(self, _msg: Empty):
-        if self._state in (State.IDLE, State.DONE):
-            self._armed = True
-            self._set_state(State.IDLE)
-
     def _cb_draw_image(self, msg: String):
         if self._state not in (State.IDLE, State.DONE) or self._ee_position is None:
             self.get_logger().warn(f"Cannot draw now (state {self._state.value})")
@@ -185,26 +176,32 @@ class BrainNode(rclpy.node.Node):
             self.get_logger().error(str(e))
             return
         cx, cy, half = *self._draw_center, self._draw_size / 2
-        for corner in ((cx - half, cy - half), (cx - half, cy + half),
-                       (cx + half, cy - half), (cx + half, cy + half)):
-            _, error = self._solve_ik(self._pen_target(corner), down=True)
+        checks = [(f"Paper corner {np.round(c, 3)}", self._pen_target(c))
+                  for c in ((cx - half, cy - half), (cx - half, cy + half),
+                            (cx + half, cy - half), (cx + half, cy + half))]
+        checks += [("Pen holder (grasp)", self._holder_target(self._pen_length)),
+                   ("Pen holder (above)", self._holder_target(self._above_pen_z()))]
+        for name, target in checks:
+            _, error = self._solve_ik(target, down=True)
             if error > IK_TOLERANCE:
-                self.get_logger().error(f"Paper corner {np.round(corner, 3)} unreachable, aborting")
+                self.get_logger().error(f"{name} unreachable, aborting")
                 return
         self.get_logger().info(
             f"Drawing {msg.data}: {len(strokes)} strokes, {sum(map(len, strokes))} points"
         )
-        self._armed = False
         self._home_q = self._q.copy()
         self._strokes, self._stroke_i = strokes, 0
         self._ink, self._last_ink = [], None
         self._publish_lines(self._plan_pub, [p for s in strokes for p in zip(s[:-1], s[1:])],
                             ColorRGBA(r=0.6, g=0.6, b=0.6, a=0.6))
-        self._start_stroke()
+        if self._pen_held:
+            self._start_stroke()
+        else:
+            self._move(State.PEN_FETCH, self._holder_target(self._above_pen_z()), GRIPPER_OPEN)
 
     def _go_to(self, point, frame):
         if self._state not in (State.IDLE, State.DONE):
-            return False, f"Busy: pick & place running ({self._state.value})"
+            return False, f"Busy: drawing ({self._state.value})"
         if frame not in ROBOT_FRAMES:
             return False, f"Unsupported frame '{frame}', expected world or base_link"
 
@@ -219,51 +216,78 @@ class BrainNode(rclpy.node.Node):
 
     def _step(self):
         elapsed = time.monotonic() - self._state_start
+        if self._ee_position is not None:
+            self._publish_pen()
 
-        if self._state == State.IDLE:
-            if self._armed and self._object is not None and self._ee_position is not None:
-                self._armed = False
-                self._home_q = self._q.copy()
-                self._pick = self._object.copy()
-                self._move(State.APPROACH, self._pick + [0.0, 0.0, HOVER_HEIGHT], GRIPPER_OPEN)
-
-        elif self._state == State.APPROACH:
-            if self._arrived(elapsed):
-                self._move(State.DESCEND, self._pick - [0.0, 0.0, GRASP_DEPTH], GRIPPER_OPEN)
-
-        elif self._state == State.DESCEND:
-            if self._arrived(elapsed, GRASP_TOLERANCE):
-                self._send_joint_command(self._q, GRIPPER_CLOSED)
-                self._set_state(State.GRASP)
-
-        elif self._state == State.GRASP:
-            if elapsed > GRIPPER_WAIT:
-                self._move(State.LIFT, self._pick + [0.0, 0.0, HOVER_HEIGHT], GRIPPER_CLOSED)
-
-        elif self._state == State.LIFT:
-            if self._arrived(elapsed):
-                if self._box is None:
-                    if elapsed > MOTION_TIMEOUT:
-                        self.get_logger().error("Drop box never seen, aborting")
-                        self._go_home()
-                    return
-                self._move(State.TRANSPORT, self._box + [0.0, 0.0, DROP_HEIGHT], GRIPPER_CLOSED)
-
-        elif self._state == State.TRANSPORT:
-            if self._arrived(elapsed):
-                self._send_joint_command(self._q, GRIPPER_OPEN)
-                self._set_state(State.RELEASE)
-
-        elif self._state == State.RELEASE:
-            if elapsed > GRIPPER_WAIT:
-                self._go_home()
-
-        elif self._state in (State.PEN_TRAVEL, State.PEN_DOWN, State.TRACE, State.PEN_UP):
+        if self._state in (State.PEN_TRAVEL, State.PEN_DOWN, State.TRACE, State.PEN_UP):
             self._step_drawing(elapsed)
+
+        elif self._state.value.startswith("PEN_"):
+            self._step_pen_handling(elapsed)
 
         elif self._state == State.RETURN:
             if self._arrived(elapsed):
                 self._set_state(State.DONE)
+
+    # ------------------------------------------------------- pen handling
+
+    def _holder_target(self, z):
+        return np.array([*self._pen_holder_xy, z])
+
+    def _above_pen_z(self):
+        """Gripper frame height with the jaw tips just above the pen standing in the holder."""
+        return self._pen_total + PEN_ABOVE_MARGIN
+
+    def _clear_z(self):
+        """Gripper frame height with the held pen tip just above the holder."""
+        return self._pen_length + self._holder_height + HOLDER_CLEARANCE
+
+    def _step_pen_handling(self, elapsed):
+        """Take the pen out of the holder (FETCH..EXTRACT) or put it back (STOW..LEAVE).
+        Vertical moves only, right above the holder."""
+        state = self._state
+        if state == State.PEN_FETCH and self._arrived(elapsed):
+            self._move(State.PEN_REACH, self._holder_target(self._pen_length), GRIPPER_OPEN)
+        elif state == State.PEN_REACH and self._arrived(elapsed, GRASP_TOLERANCE):
+            self._send_joint_command(self._q, GRIPPER_CLOSED)
+            self._pen_held = True
+            self._set_state(State.PEN_GRIP)
+        elif state == State.PEN_GRIP and elapsed > GRIPPER_WAIT:
+            self._move(State.PEN_EXTRACT, self._holder_target(self._clear_z()), GRIPPER_CLOSED)
+        elif state == State.PEN_EXTRACT and self._arrived(elapsed):
+            self._start_stroke()
+        elif state == State.PEN_STOW and self._arrived(elapsed):
+            self._move(State.PEN_INSERT, self._holder_target(self._pen_length + INSERT_GAP),
+                       GRIPPER_CLOSED)
+        elif state == State.PEN_INSERT and self._arrived(elapsed, GRASP_TOLERANCE):
+            self._send_joint_command(self._q, GRIPPER_OPEN)
+            self._pen_held = False
+            self._set_state(State.PEN_RELEASE)
+        elif state == State.PEN_RELEASE and elapsed > GRIPPER_WAIT:
+            self._move(State.PEN_LEAVE, self._holder_target(self._above_pen_z()), GRIPPER_OPEN)
+        elif state == State.PEN_LEAVE and self._arrived(elapsed):
+            self._go_home(GRIPPER_OPEN)
+
+    def _publish_pen(self):
+        """Pen in RViz: in the gripper when held (FK), standing in the holder otherwise."""
+        msg = Marker()
+        msg.header.frame_id = "world"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.type = Marker.CYLINDER
+        msg.scale.x = msg.scale.y = 0.011
+        msg.scale.z = self._pen_total
+        msg.color = ColorRGBA(r=1.0, g=0.55, b=0.0, a=1.0)
+        if self._pen_held:
+            ee = self._forward_kinematics(self._q)
+            center = ee.translation + ee.rotation[:, 2] * (self._pen_length - self._pen_total / 2)
+            quat = pin.Quaternion(ee.rotation)
+            msg.pose.orientation.x, msg.pose.orientation.y = quat.x, quat.y
+            msg.pose.orientation.z, msg.pose.orientation.w = quat.z, quat.w
+        else:
+            center = self._holder_target(self._pen_total / 2)
+            msg.pose.orientation.w = 1.0
+        msg.pose.position.x, msg.pose.position.y, msg.pose.position.z = map(float, center)
+        self._pen_pub.publish(msg)
 
     # -------------------------------------------------------------- drawing
 
@@ -274,7 +298,7 @@ class BrainNode(rclpy.node.Node):
     def _start_stroke(self):
         if self._stroke_i >= len(self._strokes):
             self.get_logger().info("Drawing done")
-            self._go_home(GRIPPER_CLOSED)  # keep holding the pen
+            self._move(State.PEN_STOW, self._holder_target(self._clear_z()), GRIPPER_CLOSED)
             return
         self._point_i = 0
         start = self._strokes[self._stroke_i][0]
