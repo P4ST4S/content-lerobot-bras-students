@@ -2,7 +2,8 @@
 
 Generates the STL used both for 3D printing and as the RViz mesh:
     uv run --with manifold3d --with numpy hardware/pen_holder/pen_holder.py
-Writes pen_holder.stl here and into ros2_ws/src/so101_description/meshes/.
+Writes pen_holder.stl here and into ros2_ws/src/so101_description/meshes/, plus
+pen_holder_print.stl: same part flipped for printing (send this one to the slicer).
 
 Geometry (mm, origin = center of the bottom face, z up as it sits on the table):
   - through bore GUIDE_D keeps the pen vertical, the pen tip rests on the table;
@@ -81,3 +82,8 @@ if __name__ == "__main__":
     for out in OUTPUTS:
         write_stl(part, out)
         print(f"{out}  ({part.num_tri()} triangles, {part.volume() / 1000:.1f} cm3)")
+    # Print orientation: upside down, finger plate on the bed, no supports needed.
+    printable = part.rotate((180, 0, 0)).translate((0, 0, HEIGHT))
+    assert abs(printable.bounding_box()[2]) < 1e-6
+    write_stl(printable, HERE / "pen_holder_print.stl")
+    print(HERE / "pen_holder_print.stl")
