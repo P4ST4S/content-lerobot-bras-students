@@ -146,6 +146,16 @@ docker-compose up -d control viz rviz        # RViz : http://localhost:6080/vnc.
 ./draw.sh ../ros2_ws/images/smiley.png       # ou n'importe quelle image : ./draw.sh ~/Desktop/chat.png
 ```
 
+**Interface web :** http://localhost:8080. On y dépose une image, ou on clique sur « Étoile » / « Smiley » ; la page n'affiche que la vue 3D de RViz, qu'on peut tourner et zoomer à la souris.
+- `ros2_ws/web/server.py` (bibliothèque standard et `rclpy`, dans le container `rviz`) : il enregistre l'image sous
+  `images/web_upload.png` ou `.jpg` (PNG/JPEG reconnus par leurs premiers octets, 10 Mo max) et la publie sur `/draw_image`.
+  Auto-check : `docker-compose exec rviz python3 /ros2_ws/web/server.py --selftest`.
+- `ros2_ws/web/index.html` affiche l'écran de RViz avec le client de noVNC (`core/rfb.js`), sans l'interface de noVNC.
+- RViz tourne en plein écran (`--fullscreen`). Pour retrouver les panneaux, ouvrir noVNC (http://localhost:6080/vnc.html) et appuyer sur F11.
+- Si le bras est occupé, la page affiche quand même « Sent… » : le brain ignore la demande (`Cannot draw now` dans les logs).
+- Attention : ne pas désactiver le display « Image » dans `so101.rviz`. RViz Jazzy refuse alors toute la
+  config (`Could not load display config: Invalid argument`). En plein écran, son panneau est de toute façon masqué.
+
 `docker/draw.sh <image>` :
 - copie l'image dans `ros2_ws/images/` si elle est ailleurs (le dossier est monté dans le
   container sous `/ros2_ws/images/`) ;
